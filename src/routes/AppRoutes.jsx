@@ -17,6 +17,7 @@ import Education from '../pages/calculators/Education';
 import HomeLoan from '../pages/calculators/HomeLoan';
 import CarPlanning from '../pages/calculators/CarPlanning';
 import Vacation from '../pages/calculators/Vacation';
+import SIPPerformance from '../pages/calculators/SIPPerformance';
 
 const AppRoutes = () => {
   return (
@@ -38,6 +39,7 @@ const AppRoutes = () => {
       <Route path="/calculators/home-loan" element={<HomeLoan />} />
       <Route path="/calculators/car-planning" element={<CarPlanning />} />
       <Route path="/calculators/vacation" element={<Vacation />} />
+      <Route path="/calculators/sip-performance" element={<SIPPerformance />} />
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />

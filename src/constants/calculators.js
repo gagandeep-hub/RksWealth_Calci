@@ -12,7 +12,8 @@ import {
   GraduationCap, 
   Home, 
   Car, 
-  Plane 
+  Plane,
+  Award
 } from 'lucide-react';
 
 export const CALCULATORS = [
@@ -141,5 +142,14 @@ export const CALCULATORS = [
     path: '/calculators/vacation',
     color: 'text-teal-600',
     bgColor: 'bg-teal-600/10'
+  },
+  {
+    id: 'sip-performance',
+    title: 'SIP Performance Calculator',
+    description: 'Calculate actual historical SIP returns using real mutual fund NAV data from MFAPI.',
+    icon: Award,
+    path: '/calculators/sip-performance',
+    color: 'text-cyan-500',
+    bgColor: 'bg-cyan-500/10'
   }
 ];
