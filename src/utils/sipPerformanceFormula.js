@@ -246,8 +246,9 @@ export const calculateSIPPerformance = (monthlyAmount, startDate, endDate, valua
   const cashFlows = [];
 
   for (const sipDate of sipDates) {
-    const navEntry = findNearestNavOnOrAfter(sipDate, sorted);
-    if (!navEntry) continue; // SIP date is beyond available NAV data
+    // Use NAV on or before the SIP date (previous trading day if it falls on a weekend/holiday)
+    const navEntry = findNearestNavOnOrBefore(sipDate, sorted);
+    if (!navEntry) continue; // No NAV available before this SIP date (too early in history)
 
     const units = monthlyAmount / navEntry.nav;
     cumulativeUnits += units;

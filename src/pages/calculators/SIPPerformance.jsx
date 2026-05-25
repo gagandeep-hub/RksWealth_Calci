@@ -743,6 +743,18 @@ const SIPPerformance = () => {
           </AnimatePresence>
         </motion.div>
       </div>
+
+      {/* ── Disclaimer ── */}
+      <div className="mt-10 flex items-start gap-3 px-5 py-4 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-2xl">
+        <Info className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+          <span className="font-semibold">Disclaimer:</span>{' '}
+          This calculator is for informational and illustrative purposes only and does not
+          constitute investment advice. Scheme performance shown is based on historical NAV
+          data, and past performance may or may not be sustained in the future. Actual
+          returns may vary depending on market conditions.
+        </p>
+      </div>
     </div>
   );
 };

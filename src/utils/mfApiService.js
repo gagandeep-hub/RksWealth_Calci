@@ -1,78 +1,113 @@
 /**
- * MFAPI Service
- * Handles all network requests to https://api.mfapi.in
- * Uses in-memory caching to avoid redundant fetches during a session.
+ * MF API Service
+ *
+ * Two separate data sources:
+ *   1. AdvisoryKhoj Scheme Master — AMC list + scheme metadata
+ *      GET https://rkswealth.in/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC
+ *      Response fields: AMC_Name, Scheme_Name, Scheme_Amfi_code, NAV, Nav_Date, Scheme_Category, etc.
+ *
+ *   2. MFAPI — historical NAV data per scheme
+ *      GET https://api.mfapi.in/mf/{schemeCode}
+ *      Scheme_Amfi_code from AdvisoryKhoj is the direct MFAPI schemeCode (confirmed).
+ *
+ * All network results are cached in-memory for the session lifetime.
  */
 
-const BASE_URL = 'https://api.mfapi.in/mf';
+// ─── API endpoints ────────────────────────────────────────────────────────────
 
-// In-memory cache store
+const SCHEME_MASTER_URL =
+  'https://rkswealth.in/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC';
+
+const MFAPI_BASE_URL = 'https://api.mfapi.in/mf';
+
+// ─── In-memory cache ──────────────────────────────────────────────────────────
+
 const cache = {
+  /** @type {Array<NormalizedScheme>|null} */
   allSchemes: null,
+  /** @type {Record<string, MfapiSchemeDetail>} */
   navHistory: {},
 };
 
+// ─── Type shapes (JSDoc) ──────────────────────────────────────────────────────
+
 /**
- * Fetch all mutual fund schemes from MFAPI.
- * Results are cached in-memory after the first successful fetch.
+ * @typedef {Object} NormalizedScheme
+ * @property {string} schemeCode   - AMFI scheme code (same as MFAPI schemeCode)
+ * @property {string} schemeName   - Full scheme name from AdvisoryKhoj
+ * @property {string} amcName      - Fund house name
+ * @property {string} category     - Scheme category
+ * @property {number|null} latestNav - Latest NAV from scheme master (may be stale)
+ * @property {string} navDate      - Latest NAV date string
+ * @property {number|null} sipMinAmount - Minimum SIP amount
+ */
+
+/**
+ * @typedef {Object} MfapiSchemeDetail
+ * @property {{ fund_house: string, scheme_type: string, scheme_category: string, scheme_code: number, scheme_name: string }} meta
+ * @property {Array<{ date: string, nav: string }>} data  - Newest first, format "DD-Mon-YYYY"
+ * @property {string} status
+ */
+
+// ─── Scheme Master (AdvisoryKhoj) ─────────────────────────────────────────────
+
+/**
+ * Fetch all mutual fund schemes from AdvisoryKhoj scheme master API.
+ * Results are normalised to { schemeCode, schemeName, amcName, ... } shape
+ * and cached in-memory after the first successful fetch.
  *
- * @returns {Promise<Array>} Array of scheme objects: [{ schemeCode, schemeName }]
+ * @returns {Promise<NormalizedScheme[]>}
  */
 export const fetchAllSchemes = async () => {
   if (cache.allSchemes) {
     return cache.allSchemes;
   }
 
-  const response = await fetch(BASE_URL);
+  const response = await fetch(SCHEME_MASTER_URL);
   if (!response.ok) {
-    throw new Error(`Failed to fetch schemes: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Failed to fetch scheme master: ${response.status} ${response.statusText}`
+    );
   }
 
-  const data = await response.json();
-  cache.allSchemes = data;
-  return data;
+  const json = await response.json();
+
+  // AdvisoryKhoj wraps records in a "data" array
+  const records = Array.isArray(json) ? json : (json.data ?? []);
+
+  if (records.length === 0) {
+    throw new Error('Scheme master returned no records. Please try again later.');
+  }
+
+  // Normalise each record to a consistent internal shape
+  const normalised = records
+    .filter((r) => r.Scheme_Amfi_code) // skip entries without a valid AMFI code
+    .map((r) => ({
+      schemeCode: String(r.Scheme_Amfi_code).trim(),
+      schemeName: (r.Scheme_Name || '').trim(),
+      amcName: (r.AMC_Name || '').trim(),
+      category: (r.Scheme_Category || '').trim(),
+      latestNav: r.NAV ? parseFloat(r.NAV) : null,
+      navDate: r.Nav_Date || '',
+      sipMinAmount: r.Sip_minimum_amount ? parseFloat(r.Sip_minimum_amount) : null,
+    }));
+
+  cache.allSchemes = normalised;
+  return normalised;
 };
 
-/**
- * Fetch NAV history for a specific scheme.
- * Results are cached per schemeCode in-memory.
- *
- * @param {string|number} schemeCode - The unique AMFI scheme code
- * @returns {Promise<Object>} Scheme detail object with { meta, data: [{date, nav}] }
- */
-export const fetchSchemeNavHistory = async (schemeCode) => {
-  const key = String(schemeCode);
-
-  if (cache.navHistory[key]) {
-    return cache.navHistory[key];
-  }
-
-  const response = await fetch(`${BASE_URL}/${key}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch NAV history for scheme ${key}: ${response.status}`);
-  }
-
-  const data = await response.json();
-  cache.navHistory[key] = data;
-  return data;
-};
+// ─── AMC helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Extract unique AMC (Fund House) names from the full scheme list.
- * Sorted alphabetically for easy dropdown navigation.
+ * Extract sorted unique AMC (Fund House) names from the normalised scheme list.
  *
- * @param {Array} schemes - Full scheme list from fetchAllSchemes()
- * @returns {Array<string>} Sorted array of unique AMC names
+ * @param {NormalizedScheme[]} schemes
+ * @returns {string[]} Sorted array of unique AMC names
  */
 export const extractAmcList = (schemes) => {
   const amcSet = new Set();
   for (const scheme of schemes) {
-    // schemeName format: "AMC Name - Scheme Name - Option"
-    // We extract the part before the first dash separator
-    const parts = scheme.schemeName.split(' - ');
-    if (parts.length > 0) {
-      amcSet.add(parts[0].trim());
-    }
+    if (scheme.amcName) amcSet.add(scheme.amcName);
   }
   return Array.from(amcSet).sort();
 };
@@ -80,11 +115,69 @@ export const extractAmcList = (schemes) => {
 /**
  * Filter schemes belonging to a specific AMC.
  *
- * @param {Array} schemes - Full scheme list
- * @param {string} amcName - The selected AMC name
- * @returns {Array} Filtered scheme objects for the selected AMC
+ * @param {NormalizedScheme[]} schemes
+ * @param {string} amcName - Selected AMC name
+ * @returns {NormalizedScheme[]}
  */
 export const filterSchemesByAmc = (schemes, amcName) => {
   if (!amcName) return [];
-  return schemes.filter((s) => s.schemeName.startsWith(amcName));
+  return schemes.filter((s) => s.amcName === amcName);
+};
+
+// ─── MFAPI — NAV history ──────────────────────────────────────────────────────
+
+/**
+ * Fetch full NAV history for a scheme from MFAPI.
+ * Scheme_Amfi_code from AdvisoryKhoj is used directly as the MFAPI scheme code.
+ * Results are cached per schemeCode for the session lifetime.
+ *
+ * @param {string|number} schemeCode - AMFI scheme code
+ * @returns {Promise<MfapiSchemeDetail>} Object with { meta, data: [{date, nav}], status }
+ */
+export const fetchSchemeNavHistory = async (schemeCode) => {
+  const key = String(schemeCode).trim();
+
+  if (cache.navHistory[key]) {
+    return cache.navHistory[key];
+  }
+
+  const response = await fetch(`${MFAPI_BASE_URL}/${key}`);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch NAV history for scheme ${key}: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data = await response.json();
+
+  if (data.status !== 'SUCCESS' || !data.data || data.data.length === 0) {
+    throw new Error(
+      `No NAV data available for scheme ${key}. It may be inactive or delisted.`
+    );
+  }
+
+  cache.navHistory[key] = data;
+  return data;
+};
+
+/**
+ * Fetch only the latest NAV for a scheme from MFAPI (lighter request).
+ *
+ * @param {string|number} schemeCode
+ * @returns {Promise<{ nav: number, date: string }>}
+ */
+export const fetchLatestNav = async (schemeCode) => {
+  const key = String(schemeCode).trim();
+  const response = await fetch(`${MFAPI_BASE_URL}/${key}/latest`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch latest NAV for scheme ${key}: ${response.status}`);
+  }
+  const data = await response.json();
+  if (data.status !== 'SUCCESS' || !data.data?.[0]) {
+    throw new Error(`No latest NAV available for scheme ${key}.`);
+  }
+  return {
+    nav: parseFloat(data.data[0].nav),
+    date: data.data[0].date,
+  };
 };
