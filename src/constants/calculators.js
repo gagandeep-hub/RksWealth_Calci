@@ -13,7 +13,8 @@ import {
   Home, 
   Car, 
   Plane,
-  Award
+  Award,
+  ArrowDownToLine
 } from 'lucide-react';
 
 export const CALCULATORS = [
@@ -151,5 +152,23 @@ export const CALCULATORS = [
     path: '/calculators/sip-performance',
     color: 'text-cyan-500',
     bgColor: 'bg-cyan-500/10'
+  },
+  {
+    id: 'stp-performance',
+    title: 'STP Performance Calculator',
+    description: 'Analyse actual historical STP returns for both source and destination funds using real NAV data.',
+    icon: ArrowRightLeft,
+    path: '/calculators/stp-performance',
+    color: 'text-purple-500',
+    bgColor: 'bg-purple-500/10'
+  },
+  {
+    id: 'swp-performance',
+    title: 'SWP Performance Calculator',
+    description: 'Analyse actual historical SWP returns including fund balance and portfolio value using real NAV data.',
+    icon: ArrowDownToLine,
+    path: '/calculators/swp-performance',
+    color: 'text-orange-500',
+    bgColor: 'bg-orange-500/10'
   }
 ];

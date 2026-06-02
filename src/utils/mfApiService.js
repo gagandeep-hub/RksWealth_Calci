@@ -15,8 +15,9 @@
 
 // ─── API endpoints ────────────────────────────────────────────────────────────
 
-const SCHEME_MASTER_URL =
-  'https://rkswealth.in/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC';
+const SCHEME_MASTER_URL = import.meta.env.DEV
+  ? '/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC'
+  : 'https://rkswealth.in/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC';
 
 const MFAPI_BASE_URL = 'https://api.mfapi.in/mf';
 

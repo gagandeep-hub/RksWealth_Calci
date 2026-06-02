@@ -18,6 +18,8 @@ import HomeLoan from '../pages/calculators/HomeLoan';
 import CarPlanning from '../pages/calculators/CarPlanning';
 import Vacation from '../pages/calculators/Vacation';
 import SIPPerformance from '../pages/calculators/SIPPerformance';
+import STPPerformance from '../pages/calculators/STPPerformance';
+import SWPPerformance from '../pages/calculators/SWPPerformance';
 
 const AppRoutes = () => {
   return (
@@ -40,6 +42,8 @@ const AppRoutes = () => {
       <Route path="/calculators/car-planning" element={<CarPlanning />} />
       <Route path="/calculators/vacation" element={<Vacation />} />
       <Route path="/calculators/sip-performance" element={<SIPPerformance />} />
+      <Route path="/calculators/stp-performance" element={<STPPerformance />} />
+      <Route path="/calculators/swp-performance" element={<SWPPerformance />} />
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -8,4 +8,13 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://rkswealth.in',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 })
