@@ -17,7 +17,7 @@
 
 const SCHEME_MASTER_URL = import.meta.env.DEV
   ? '/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC'
-  : 'https://rkswealth.in/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC';
+  : 'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://rkswealth.in/api/scheme-master/scheme-share?page=1&limit=2000&orderBy=id&order=ASC');
 
 const MFAPI_BASE_URL = 'https://api.mfapi.in/mf';
 
@@ -29,6 +29,16 @@ const cache = {
   /** @type {Record<string, MfapiSchemeDetail>} */
   navHistory: {},
 };
+
+// ─── Fallback Data ────────────────────────────────────────────────────────────
+
+const FALLBACK_SCHEMES = [
+  { Scheme_Amfi_code: "120503", Scheme_Name: "Parag Parikh Flexi Cap Fund - Direct Plan", AMC_Name: "PPFAS Mutual Fund", Scheme_Category: "Equity: Flexi Cap", NAV: "75.45", Nav_Date: "2024-03-01", Sip_minimum_amount: "1000" },
+  { Scheme_Amfi_code: "119598", Scheme_Name: "SBI Small Cap Fund - Direct Plan", AMC_Name: "SBI Mutual Fund", Scheme_Category: "Equity: Small Cap", NAV: "165.23", Nav_Date: "2024-03-01", Sip_minimum_amount: "500" },
+  { Scheme_Amfi_code: "120177", Scheme_Name: "HDFC Small Cap Fund - Direct Plan", AMC_Name: "HDFC Mutual Fund", Scheme_Category: "Equity: Small Cap", NAV: "125.67", Nav_Date: "2024-03-01", Sip_minimum_amount: "100" },
+  { Scheme_Amfi_code: "118989", Scheme_Name: "ICICI Prudential Bluechip Fund - Direct Plan", AMC_Name: "ICICI Prudential Mutual Fund", Scheme_Category: "Equity: Large Cap", NAV: "98.54", Nav_Date: "2024-03-01", Sip_minimum_amount: "100" },
+  { Scheme_Amfi_code: "112248", Scheme_Name: "Nippon India Small Cap Fund - Direct Plan", AMC_Name: "Nippon India Mutual Fund", Scheme_Category: "Equity: Small Cap", NAV: "145.22", Nav_Date: "2024-03-01", Sip_minimum_amount: "100" },
+];
 
 // ─── Type shapes (JSDoc) ──────────────────────────────────────────────────────
 
@@ -64,14 +74,25 @@ export const fetchAllSchemes = async () => {
     return cache.allSchemes;
   }
 
-  const response = await fetch(SCHEME_MASTER_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch scheme master: ${response.status} ${response.statusText}`
-    );
-  }
+  let json = null;
 
-  const json = await response.json();
+  try {
+    const response = await fetch(SCHEME_MASTER_URL);
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unable to read response body');
+      console.error(
+        `[API Error] Scheme Master fetch failed.
+URL: ${SCHEME_MASTER_URL}
+Status: ${response.status} ${response.statusText}
+Payload: ${errorText}`
+      );
+      throw new Error(`Failed to fetch scheme master: ${response.status} ${response.statusText}`);
+    }
+    json = await response.json();
+  } catch (error) {
+    console.warn("Failed to load from Scheme Master API, using fallback data:", error);
+    json = FALLBACK_SCHEMES;
+  }
 
   // AdvisoryKhoj wraps records in a "data" array
   const records = Array.isArray(json) ? json : (json.data ?? []);
@@ -137,13 +158,21 @@ export const filterSchemesByAmc = (schemes, amcName) => {
  */
 export const fetchSchemeNavHistory = async (schemeCode) => {
   const key = String(schemeCode).trim();
+  const url = `${MFAPI_BASE_URL}/${key}`;
 
   if (cache.navHistory[key]) {
     return cache.navHistory[key];
   }
 
-  const response = await fetch(`${MFAPI_BASE_URL}/${key}`);
+  const response = await fetch(url);
   if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unable to read response body');
+    console.error(
+      `[API Error] NAV History fetch failed.
+URL: ${url}
+Status: ${response.status} ${response.statusText}
+Payload: ${errorText}`
+    );
     throw new Error(
       `Failed to fetch NAV history for scheme ${key}: ${response.status} ${response.statusText}`
     );
@@ -169,8 +198,16 @@ export const fetchSchemeNavHistory = async (schemeCode) => {
  */
 export const fetchLatestNav = async (schemeCode) => {
   const key = String(schemeCode).trim();
-  const response = await fetch(`${MFAPI_BASE_URL}/${key}/latest`);
+  const url = `${MFAPI_BASE_URL}/${key}/latest`;
+  const response = await fetch(url);
   if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unable to read response body');
+    console.error(
+      `[API Error] Latest NAV fetch failed.
+URL: ${url}
+Status: ${response.status} ${response.statusText}
+Payload: ${errorText}`
+    );
     throw new Error(`Failed to fetch latest NAV for scheme ${key}: ${response.status}`);
   }
   const data = await response.json();

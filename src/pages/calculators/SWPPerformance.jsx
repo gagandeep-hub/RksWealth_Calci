@@ -313,9 +313,9 @@ const SWPPerformance = () => {
         setAllSchemes(data);
         setAmcList(extractAmcList(data));
         setSchemesFetchStatus('done');
-      } catch {
+      } catch (e) {
         setSchemesFetchStatus('error');
-        setError('Failed to load fund data. Please check your internet connection and refresh.');
+        setError(e.message || 'Failed to load fund data.');
       }
     };
     load();

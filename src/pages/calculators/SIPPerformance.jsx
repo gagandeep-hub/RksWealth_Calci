@@ -328,7 +328,7 @@ const SIPPerformance = () => {
         setSchemesFetchStatus('done');
       } catch (e) {
         setSchemesFetchStatus('error');
-        setError('Failed to load fund data. Please check your internet connection and refresh.');
+        setError(e.message || 'Failed to load fund data.');
       }
     };
     load();
