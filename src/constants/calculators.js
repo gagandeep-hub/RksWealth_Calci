@@ -14,7 +14,8 @@ import {
   Car, 
   Plane,
   Award,
-  ArrowDownToLine
+  ArrowDownToLine,
+  Scale
 } from 'lucide-react';
 
 export const CALCULATORS = [
@@ -170,5 +171,14 @@ export const CALCULATORS = [
     path: '/calculators/swp-performance',
     color: 'text-orange-500',
     bgColor: 'bg-orange-500/10'
+  },
+  {
+    id: 'lamf',
+    title: 'Loan vs Redemption',
+    description: 'Compare taking a Loan Against Mutual Funds (LAMF) vs. redeeming your units when you need cash.',
+    icon: Scale,
+    path: '/calculators/lamf',
+    color: 'text-teal-500',
+    bgColor: 'bg-teal-500/10'
   }
 ];

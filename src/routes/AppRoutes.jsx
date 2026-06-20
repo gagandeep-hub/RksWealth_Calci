@@ -20,6 +20,7 @@ import Vacation from '../pages/calculators/Vacation';
 import SIPPerformance from '../pages/calculators/SIPPerformance';
 import STPPerformance from '../pages/calculators/STPPerformance';
 import SWPPerformance from '../pages/calculators/SWPPerformance';
+import LAMF from '../pages/calculators/LAMF';
 
 const AppRoutes = () => {
   return (
@@ -44,6 +45,7 @@ const AppRoutes = () => {
       <Route path="/calculators/sip-performance" element={<SIPPerformance />} />
       <Route path="/calculators/stp-performance" element={<STPPerformance />} />
       <Route path="/calculators/swp-performance" element={<SWPPerformance />} />
+      <Route path="/calculators/lamf" element={<LAMF />} />
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
