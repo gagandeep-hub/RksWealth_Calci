@@ -16,11 +16,22 @@ import {
   Scale,
 } from 'lucide-react';
 import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
+import {
   formatINR,
   computeProcessingFee,
   computeCapitalGains,
-  computeLTCGTax,
+  calcTaxFromCostBasis,
   calcLoanPortfolio,
+  generateYearByYearData,
 } from '../../utils/lamfFormula';
 
 // ---------------------------------------------------------------------------
@@ -203,6 +214,27 @@ const ResultRow = ({ label, value, type = 'normal', note = '' }) => {
 };
 
 // ---------------------------------------------------------------------------
+// Sub-component: Custom Recharts Tooltip
+// ---------------------------------------------------------------------------
+const ChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg px-4 py-3 text-sm">
+      <p className="font-bold text-gray-700 dark:text-gray-200 mb-2">Year {label}</p>
+      {payload.map((entry) => (
+        <div key={entry.dataKey} className="flex items-center gap-2 py-0.5">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: entry.color }} />
+          <span className="text-gray-500 dark:text-gray-400">{entry.name}:</span>
+          <span className="font-bold" style={{ color: entry.color }}>
+            {formatINR(entry.value)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 const LAMF = () => {
@@ -212,17 +244,23 @@ const LAMF = () => {
   const [amountNeeded, setAmountNeeded] = useState(500000);
   const [durationYears, setDurationYears] = useState(2);
 
-  // ── Section 3: Redemption (editable overrides) ─────────────────────────
-  // capitalGainsOverride allows manual editing.
-  // Formula default: portfolioAmount × (CAGR/100)
-  // Auto-resets (clears override) when portfolioAmount or expectedCAGR change.
-  const [capitalGainsOverride, setCapitalGainsOverride] = useState(null);
+  // ── Section 3: Redemption (cost-basis inputs) ───────────────────────────
+  // purchaseCost: user's real cost basis for the units being sold.
+  // Default: 70% of amountNeeded — just a reasonable placeholder.
+  // existingFYGains: LTCG already booked this FY from other transactions.
+  const [purchaseCost, setPurchaseCost] = useState(() => Math.round(500000 * 0.7));
+  const [existingFYGains, setExistingFYGains] = useState(0);
   const [stcgTax, setStcgTax] = useState(0);
 
-  // Reset override to null when the formula inputs change
+  // Keep the default purchaseCost placeholder in sync with amountNeeded changes,
+  // but ONLY if the user hasn't manually changed it away from the "70%" default.
+  // We track whether the user has overridden it.
+  const [purchaseCostUserEdited, setPurchaseCostUserEdited] = useState(false);
   useEffect(() => {
-    setCapitalGainsOverride(null);
-  }, [portfolioAmount, expectedCAGR]);
+    if (!purchaseCostUserEdited) {
+      setPurchaseCost(Math.round(amountNeeded * 0.7));
+    }
+  }, [amountNeeded, purchaseCostUserEdited]);
 
   // ── Section 4: Loan details ────────────────────────────────────────────
   const [loanInterestRate, setLoanInterestRate] = useState(10);
@@ -234,40 +272,46 @@ const LAMF = () => {
     setProcessingFee(computeProcessingFee(amountNeeded));
   }, [amountNeeded]);
 
-  // ── Derived redemption values (all useMemo — fully reactive) ───────────
-  const capitalGainsAmount = useMemo(
-    () => (capitalGainsOverride !== null && capitalGainsOverride !== '' ? capitalGainsOverride : portfolioAmount * (expectedCAGR / 100)),
-    [portfolioAmount, expectedCAGR, capitalGainsOverride]
+  // ── Derived redemption values ────────────────────────────────────────────
+  // Option (a): purchaseCost is the cost basis for amountNeeded (not grossed-up).
+  // This cleanly avoids circular dependency: tax is computed once on amountNeeded,
+  // then redemptionAmount = amountNeeded + totalTax.
+
+  const taxResult = useMemo(
+    () =>
+      calcTaxFromCostBasis({
+        redemptionAmount: amountNeeded, // cost basis applies to the base amount
+        purchaseCost,
+        existingFYGains,
+        stcgTax,
+      }),
+    [amountNeeded, purchaseCost, existingFYGains, stcgTax]
   );
 
-  const ltcgTax = useMemo(
-    () => 0.125 * capitalGainsAmount,
-    [capitalGainsAmount]
-  );
+  const { capitalGainsAmount, ltcgTax, totalTax } = taxResult;
 
   const redemptionAmount = useMemo(
-    () => amountNeeded + ltcgTax + stcgTax,
-    [amountNeeded, ltcgTax, stcgTax]
+    () => amountNeeded + totalTax,
+    [amountNeeded, totalTax]
   );
 
-  // Remaining portfolio = what's left after the grossed-up redemption leaves
+  // Remaining portfolio = what's left after grossed-up redemption (net of tax)
   const remainingAfterRedemption = useMemo(
-    () => portfolioAmount - redemptionAmount,
-    [portfolioAmount, redemptionAmount]
+    () => portfolioAmount - amountNeeded - totalTax,
+    [portfolioAmount, amountNeeded, totalTax]
   );
 
-  // finalRedemptionPortfolio: the remaining balance grows at CAGR
+  // finalRedemptionPortfolio: remaining balance grows at CAGR
   const finalRedemptionPortfolio = useMemo(
     () => remainingAfterRedemption * Math.pow(1 + expectedCAGR / 100, durationYears),
     [remainingAfterRedemption, expectedCAGR, durationYears]
   );
 
-  // ── Derived loan values (all useMemo) ─────────────────────────────────
+  // ── Derived loan values ─────────────────────────────────────────────────
   const loanInterest = useMemo(
     () => amountNeeded * (loanInterestRate / 100) * durationYears,
     [amountNeeded, loanInterestRate, durationYears]
   );
-  const totalTax = useMemo(() => ltcgTax + stcgTax, [ltcgTax, stcgTax]);
   const totalLoanCost = useMemo(
     () => loanInterest + processingFee,
     [loanInterest, processingFee]
@@ -281,9 +325,34 @@ const LAMF = () => {
     [grownFullPortfolio, amountNeeded, totalLoanCost]
   );
 
+  // ── Year-by-year chart data ─────────────────────────────────────────────
+  const chartData = useMemo(
+    () =>
+      generateYearByYearData({
+        portfolioAmount,
+        expectedCAGR,
+        amountNeeded,
+        totalTax,
+        loanAmount: amountNeeded,
+        loanInterestRate,
+        processingFee,
+        durationYears,
+        extraYears: 2,
+      }),
+    [portfolioAmount, expectedCAGR, amountNeeded, totalTax, loanInterestRate, processingFee, durationYears]
+  );
+
   // ── Verdict ────────────────────────────────────────────────────────────
   const loanIsBetter = finalLoanPortfolio > finalRedemptionPortfolio;
   const difference = Math.abs(finalLoanPortfolio - finalRedemptionPortfolio);
+
+  // ── Y-axis formatter for chart ─────────────────────────────────────────
+  const formatYAxis = (value) => {
+    const abs = Math.abs(value);
+    if (abs >= 1_00_00_000) return `₹${(abs / 1_00_00_000).toFixed(1)}Cr`;
+    if (abs >= 1_00_000) return `₹${(abs / 1_00_000).toFixed(1)}L`;
+    return `₹${Math.round(abs / 1000)}K`;
+  };
 
   return (
     <div className="pt-20 pb-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
@@ -387,7 +456,7 @@ const LAMF = () => {
                     {' '}(= Amount Needed + Total Tax)
                   </span>
                 </div>
-                {/* Read-only grey box matching reference UI */}
+                {/* Read-only grey box */}
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <span className="text-sm font-bold text-gray-400 dark:text-gray-500">₹</span>
                   <div className="w-28 px-3 py-1.5 text-sm font-bold text-right rounded-lg border bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 select-all">
@@ -397,39 +466,89 @@ const LAMF = () => {
               </div>
             </div>
 
-            {/* Row 2: Profit / Capital Gains Amount — editable, auto-defaulted from formula */}
+            {/* Row 2: Purchase Cost — NEW editable input */}
             <div className="mb-6">
               <div className="flex items-start justify-between gap-3 mb-1">
                 <div className="min-w-0">
                   <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 block">
-                    Profit / Capital Gains Amount (₹)
+                    Purchase Cost of Amount Being Redeemed (₹)
                   </span>
                   <span className="text-xs text-gray-400 dark:text-gray-500 block mt-0.5 leading-snug">
-                    Estimated as Portfolio Value × CAGR. Override with your
-                    actual unrealised gain from your MF statement.
+                    Your actual cost basis (what you originally paid) for the units being sold.
+                    Enter your real cost basis from your MF statement — the default (70% of amount needed) is just a placeholder.
                   </span>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">₹</span>
                   <input
                     type="number"
-                    value={capitalGainsAmount}
-                    onChange={(e) => setCapitalGainsOverride(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                    value={purchaseCost}
+                    onChange={(e) => {
+                      setPurchaseCostUserEdited(true);
+                      setPurchaseCost(Math.max(0, Number(e.target.value)));
+                    }}
                     min={0}
                     className="w-28 px-3 py-1.5 text-sm font-bold text-right rounded-lg border bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
                   />
                 </div>
               </div>
-              <p className="text-[11px] text-gray-400 dark:text-gray-500">
-                Formula default:{' '}
-                <span className="font-semibold text-gray-500 dark:text-gray-400">
-                  {formatINR(portfolioAmount)} × {expectedCAGR}%
-                  {' '}= {formatINR(computeCapitalGains(portfolioAmount, expectedCAGR))}
-                </span>
-              </p>
             </div>
 
-            {/* Row 3: LTCG Tax — derived from capitalGainsAmount, displayed read-only-styled */}
+            {/* Row 3: Capital Gains Amount — READ-ONLY derived */}
+            <div className="mb-6">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 block">
+                    Profit / Capital Gains Amount (₹)
+                  </span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500 block mt-0.5 leading-snug">
+                    = Amount Needed − Purchase Cost
+                    {' '}({formatINR(amountNeeded)} − {formatINR(purchaseCost)})
+                  </span>
+                </div>
+                {/* Read-only amber-tinted box */}
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <span className="text-sm font-bold text-amber-500 dark:text-amber-400">₹</span>
+                  <div className="w-28 px-3 py-1.5 text-sm font-bold text-right rounded-lg border bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 select-all">
+                    {Math.round(capitalGainsAmount).toLocaleString('en-IN')}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Row 4: Existing FY Gains — NEW editable input */}
+            <div className="mb-6">
+              <div className="flex items-start justify-between gap-3 mb-1">
+                <div className="min-w-0">
+                  <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 block">
+                    Your Capital Gains Used This FY (₹)
+                  </span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500 block mt-0.5 leading-snug">
+                    Enter any LTCG from equity/mutual funds you've already booked this financial year.
+                    This reduces your remaining ₹1,25,000 exemption for this transaction.
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">₹</span>
+                  <input
+                    type="number"
+                    value={existingFYGains}
+                    onChange={(e) => setExistingFYGains(Math.max(0, Number(e.target.value)))}
+                    min={0}
+                    className="w-28 px-3 py-1.5 text-sm font-bold text-right rounded-lg border bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                  />
+                </div>
+              </div>
+              {/* Exemption remaining indicator */}
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span className="text-gray-400 dark:text-gray-500">Remaining ₹1,25,000 exemption:</span>
+                <span className={`font-bold ${Math.max(0, 125000 - existingFYGains) > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
+                  {formatINR(Math.max(0, 125000 - existingFYGains))}
+                </span>
+              </div>
+            </div>
+
+            {/* Row 5: LTCG Tax — derived, read-only */}
             <div className="mb-6">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -437,7 +556,10 @@ const LAMF = () => {
                     LTCG Tax (₹)
                   </span>
                   <span className="text-xs text-gray-400 dark:text-gray-500 block mt-0.5 leading-snug">
-                    LTCG is usually 12.5% of the Capital Gains amount
+                    12.5% of taxable gains above your remaining ₹1,25,000 exemption.
+                    {taxResult.taxableGains > 0
+                      ? ` Taxable: ${formatINR(taxResult.taxableGains)} @ 12.5%`
+                      : ' Profit is within exemption limit — no LTCG tax.'}
                   </span>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -449,7 +571,7 @@ const LAMF = () => {
               </div>
             </div>
 
-            {/* Row 4: STCG Tax — manual, defaults 0 */}
+            {/* Row 6: STCG Tax — manual, defaults 0 */}
             <div className="mb-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -677,6 +799,77 @@ const LAMF = () => {
             </motion.div>
           </div>
 
+          {/* ── Year-by-Year Comparison Chart ─────────────────────────── */}
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="rounded-3xl bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 p-6 shadow-sm"
+          >
+            <div className="mb-4">
+              <h3 className="font-bold text-gray-800 dark:text-gray-100 text-base flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-emerald-500" />
+                Portfolio Value Over Time
+              </h3>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                Showing year 0 to year {durationYears + 2}
+              </p>
+            </div>
+
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.5} />
+                <XAxis
+                  dataKey="year"
+                  tickFormatter={(v) => `Yr ${v}`}
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  axisLine={{ stroke: '#e5e7eb' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tickFormatter={formatYAxis}
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={60}
+                />
+                <Tooltip content={<ChartTooltip />} />
+                <Legend
+                  wrapperStyle={{ fontSize: '12px', paddingTop: '12px' }}
+                  formatter={(value) => (
+                    <span style={{ color: value === 'Redemption' ? '#f97316' : '#10b981', fontWeight: 700 }}>
+                      {value}
+                    </span>
+                  )}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="redemptionValue"
+                  name="Redemption"
+                  stroke="#f97316"
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: '#f97316', strokeWidth: 0 }}
+                  activeDot={{ r: 6, fill: '#f97316', stroke: '#fff', strokeWidth: 2 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="loanValue"
+                  name="Loan (LAMF)"
+                  stroke="#10b981"
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: '#10b981', strokeWidth: 0 }}
+                  activeDot={{ r: 6, fill: '#10b981', stroke: '#fff', strokeWidth: 2 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+
+            <p className="mt-4 text-xs text-gray-400 dark:text-gray-500 leading-relaxed border-t border-gray-100 dark:border-gray-700 pt-3">
+              This shows how each strategy's portfolio value evolves over time. The gap between the two lines represents
+              the relative advantage of one approach over the other at each point in time — useful if you're unsure
+              exactly how long you'll need before repaying or reinvesting.
+            </p>
+          </motion.div>
+
           {/* Key Numbers panel */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -714,12 +907,13 @@ const LAMF = () => {
                 For illustrative purposes only. Assumes constant CAGR and constant loan interest rate throughout the tenure.
                 Loan interest is calculated as <strong>flat simple interest</strong> (not reducing-balance/EMI).
                 Loan principal is assumed to be repaid from the portfolio itself — in reality, if repaid from external cash flow,
-                LAMF would look even more favorable than shown here. Capital gains estimate uses a simple-growth
-                model (Portfolio Value × CAGR) and does not reflect your actual purchase NAV or cost basis.
+                LAMF would look even more favorable than shown here.
+                LTCG tax uses actual cost-basis accounting with the ₹1,25,000 annual exemption (Budget 2024 rate: 12.5%).
+                The purchase cost field defaults to 70% of your Amount Needed as a placeholder — <strong>always enter your real cost basis</strong> from your MF statement.
                 Not financial advice — consult a financial advisor before borrowing against or redeeming your mutual fund units.
               </p>
               <p className="mt-1.5 text-gray-300 dark:text-gray-600">
-                LTCG = 12.5% of estimated gains. STCG = 20% (if applicable, enter manually).
+                LTCG = 12.5% on gains above remaining ₹1,25,000 FY exemption. STCG = 20% (if applicable, enter manually).
                 Processing fee: 1% of loan, floored ₹1,250, capped ₹4,999.
               </p>
             </div>

@@ -1,13 +1,17 @@
 /**
  * LAMF (Loan Against Mutual Funds) vs Redemption Comparison Calculator
- * Formulas verified against smallcase's published example.
+ *
+ * Correction #6 changes:
+ *  - LTCG now uses real cost-basis accounting with a shared ₹1,25,000 FY exemption pool.
+ *  - computeCapitalGains() is kept for reference/display only (no longer used for tax).
+ *  - New: calcTaxFromCostBasis() — the canonical tax function.
+ *  - New: generateYearByYearData() — for the portfolio-over-time chart.
+ *  - All loan-side formulas are UNCHANGED from Correction #5.
  *
  * TODO (v2):
- *  1. Gross-up logic: redemptionAmount should be inflated so the *net* payout
- *     after all taxes equals amountNeeded. Currently redemptionAmount === amountNeeded.
- *  2. PDF export / download comparison report.
- *  3. Multi-year amortization schedule for the loan.
- *  4. Reducing-balance / EMI-based loan interest (intentionally kept as simple
+ *  1. PDF export / download comparison report.
+ *  2. Multi-year amortization schedule for the loan.
+ *  3. Reducing-balance / EMI-based loan interest (intentionally kept as simple
  *     flat interest to match the reference calculator model).
  */
 
@@ -41,86 +45,62 @@ export function computeProcessingFee(loanAmount) {
 }
 
 // ---------------------------------------------------------------------------
-// Capital gains estimate: depends ONLY on portfolioAmount and expectedCAGR.
+// Capital gains DISPLAY estimate (kept for reference; no longer used for tax).
 //   capitalGainsAmount = portfolioAmount × (CAGR/100)
-// Users who know their actual unrealised gain can override this field.
 // ---------------------------------------------------------------------------
 export function computeCapitalGains(portfolioAmount, expectedCAGR) {
   return portfolioAmount * (expectedCAGR / 100);
 }
 
 // ---------------------------------------------------------------------------
-// LTCG tax: flat 12.5% of capital gains amount.
-// NOTE: There is NO ₹1,25,000 exemption in this calculator's model —
-// the reference UI applies 12.5% to the full capitalGainsAmount directly.
+// NEW (Correction #6): Cost-basis LTCG tax with shared FY exemption pool.
+//
+//   capitalGainsAmount  = redemptionAmount − purchaseCost
+//   remainingExemption  = max(0, 1,25,000 − existingFYGains)
+//   taxableGains        = max(0, capitalGainsAmount − remainingExemption)
+//   ltcgTax             = 12.5% × taxableGains
+//   totalTax            = ltcgTax + stcgTax
+//
+// We resolve the gross-up circularity with Option (a) from the spec:
+//   purchaseCost is treated as the cost basis of the ORIGINAL amountNeeded,
+//   NOT of the grossed-up redemptionAmount. This cleanly breaks the cycle.
+//   redemptionAmount = amountNeeded + totalTax (where totalTax is computed
+//   using the user-supplied purchaseCost, not the grossed-up amount).
+//
 // ---------------------------------------------------------------------------
-export function computeLTCGTax(capitalGainsAmount) {
-  return 0.125 * capitalGainsAmount;
-}
+const EXEMPTION_LIMIT = 125000;
 
-// ---------------------------------------------------------------------------
-// Redemption amount: the GROSSED-UP figure you must redeem to net amountNeeded
-// after all tax is paid.  redemptionAmount = amountNeeded + ltcgTax + stcgTax
-// ---------------------------------------------------------------------------
-export function computeRedemptionAmount(amountNeeded, ltcgTax, stcgTax = 0) {
-  return amountNeeded + ltcgTax + stcgTax;
-}
-
-// ---------------------------------------------------------------------------
-// Convenience wrapper used for regression testing.
-// Returns all redemption-side derived values from the four primary inputs.
-// ---------------------------------------------------------------------------
-export function calculateRedemption({
-  portfolioAmount,
-  expectedCAGR,
-  amountNeeded,
-  durationYears,
-  capitalGainsOverride = null, // pass a number to override the formula
+/**
+ * @param {object} params
+ * @param {number} params.redemptionAmount   - The gross amount being redeemed (amountNeeded + tax)
+ * @param {number} params.purchaseCost       - User's actual cost basis for units being sold
+ * @param {number} params.existingFYGains    - LTCG already booked this FY elsewhere (default 0)
+ * @param {number} params.stcgTax            - Short-term capital gains tax (manual, default 0)
+ * @returns {{ capitalGainsAmount, remainingExemption, taxableGains, ltcgTax, stcgTax, totalTax }}
+ */
+export function calcTaxFromCostBasis({
+  redemptionAmount,
+  purchaseCost,
+  existingFYGains = 0,
   stcgTax = 0,
 }) {
-  const capitalGainsAmount =
-    capitalGainsOverride !== null
-      ? capitalGainsOverride
-      : computeCapitalGains(portfolioAmount, expectedCAGR);
-  const ltcgTax = computeLTCGTax(capitalGainsAmount);
+  const capitalGainsAmount = Math.max(0, redemptionAmount - purchaseCost);
+  const remainingExemption = Math.max(0, EXEMPTION_LIMIT - existingFYGains);
+  const taxableGains = Math.max(0, capitalGainsAmount - remainingExemption);
+  const ltcgTax = 0.125 * taxableGains;
   const totalTax = ltcgTax + stcgTax;
-  const redemptionAmount = computeRedemptionAmount(amountNeeded, ltcgTax, stcgTax);
-  // remainingBalance = what stays in the portfolio after the grossed-up redemption
-  const remainingBalance = portfolioAmount - amountNeeded - totalTax;
-  const finalRedemptionPortfolio =
-    remainingBalance * Math.pow(1 + expectedCAGR / 100, durationYears);
   return {
     capitalGainsAmount,
+    remainingExemption,
+    taxableGains,
     ltcgTax,
+    stcgTax,
     totalTax,
-    redemptionAmount,
-    remainingBalance,
-    finalRedemptionPortfolio,
   };
 }
 
 // ---------------------------------------------------------------------------
-// REDEMPTION scenario
-// ---------------------------------------------------------------------------
-export function calcRedemptionPortfolio({
-  portfolioAmount,
-  expectedCAGR,
-  redemptionAmount,
-  ltcgTax,
-  stcgTax,
-  durationYears,
-}) {
-  const totalTax = ltcgTax + stcgTax;
-  const remainingAfterRedemption = portfolioAmount - redemptionAmount;
-  // Tax is deducted BEFORE growth
-  const afterTax = remainingAfterRedemption - totalTax;
-  const finalRedemptionPortfolio =
-    afterTax * Math.pow(1 + expectedCAGR / 100, durationYears);
-  return { totalTax, afterTax, finalRedemptionPortfolio };
-}
-
-// ---------------------------------------------------------------------------
-// LOAN scenario (unchanged — already verified correct)
+// LOAN scenario (unchanged from Correction #5)
 // ---------------------------------------------------------------------------
 export function calcLoanPortfolio({
   portfolioAmount,
@@ -144,7 +124,47 @@ export function calcLoanPortfolio({
 }
 
 // ---------------------------------------------------------------------------
+// NEW (Correction #6): Year-by-year chart data
+//
+// Redemption path:  one-time hit (amountNeeded + totalTax) at t=0, remaining
+//                   balance compounds at CAGR.
+// Loan path:        full portfolio compounds; principal + linear interest +
+//                   one-time processing fee are netted out each year.
+//
+// Returns array of { year, redemptionValue, loanValue }
+// from year=0 up to year=maxYear (inclusive).
+// ---------------------------------------------------------------------------
+export function generateYearByYearData({
+  portfolioAmount,
+  expectedCAGR,
+  amountNeeded,
+  totalTax,
+  loanAmount,
+  loanInterestRate,
+  processingFee,
+  durationYears,
+  extraYears = 2,  // show a couple of years past the need period for trend visibility
+}) {
+  const maxYear = durationYears + extraYears;
+  const remainingAfterRedemption = portfolioAmount - amountNeeded - totalTax;
+  const rateDecimal = expectedCAGR / 100;
+
+  const data = [];
+  for (let t = 0; t <= maxYear; t++) {
+    const redemptionValue = remainingAfterRedemption * Math.pow(1 + rateDecimal, t);
+    const interestAtYear = loanAmount * (loanInterestRate / 100) * t;
+    const loanValue =
+      portfolioAmount * Math.pow(1 + rateDecimal, t) -
+      loanAmount -
+      (interestAtYear + processingFee);
+    data.push({ year: t, redemptionValue: Math.round(redemptionValue), loanValue: Math.round(loanValue) });
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
 // Combined calculation helper for verification and integration
+// (updated for Correction #6 — uses calcTaxFromCostBasis for redemption side)
 // ---------------------------------------------------------------------------
 export function calculateAll({
   portfolioAmount,
@@ -152,17 +172,24 @@ export function calculateAll({
   amountNeeded,
   durationYears,
   loanInterestRate,
+  purchaseCost,        // NEW (required for Correction #6 tax logic)
+  existingFYGains = 0, // NEW
   stcgTax = 0,
-  capitalGainsOverride = null,
 }) {
-  const redemption = calculateRedemption({
-    portfolioAmount,
-    expectedCAGR,
-    amountNeeded,
-    durationYears,
-    capitalGainsOverride,
+  // Option (a): purchaseCost is the cost basis for amountNeeded (not grossed-up).
+  // Compute tax on amountNeeded first, then build redemptionAmount from it.
+  const taxInputs = calcTaxFromCostBasis({
+    redemptionAmount: amountNeeded, // cost basis applies to the base amount
+    purchaseCost,
+    existingFYGains,
     stcgTax,
   });
+  const { ltcgTax, totalTax, capitalGainsAmount } = taxInputs;
+  const redemptionAmount = amountNeeded + totalTax;
+  const remainingBalance = portfolioAmount - amountNeeded - totalTax;
+  const finalRedemptionPortfolio =
+    remainingBalance * Math.pow(1 + expectedCAGR / 100, durationYears);
+
   const processingFee = computeProcessingFee(amountNeeded);
   const loan = calcLoanPortfolio({
     portfolioAmount,
@@ -173,18 +200,25 @@ export function calculateAll({
     loanTenureYears: durationYears,
     processingFee,
   });
+
   return {
-    ...redemption,
+    capitalGainsAmount,
+    ltcgTax,
+    totalTax,
+    redemptionAmount,
+    remainingBalance,
+    finalRedemptionPortfolio,
     loanAmount: amountNeeded,
     processingFee,
     interestAmount: loan.interest,
     totalLoanCost: loan.totalLoanCost,
+    grownFullPortfolio: loan.grownFullPortfolio,
     finalLoanPortfolio: loan.finalLoanPortfolio,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Verification fixtures (Correction #5 regression suite)
+// Verification fixtures (Correction #6 — new tax logic)
 // ---------------------------------------------------------------------------
 function runVerification() {
   const assertClose = (actual, expected, tolerance = 1, msg = '') => {
@@ -194,36 +228,65 @@ function runVerification() {
     );
   };
 
-  // Test 1: Portfolio 10L, duration 2yr
-  const r1 = calculateAll({ portfolioAmount: 1000000, expectedCAGR: 12, amountNeeded: 500000, durationYears: 2, loanInterestRate: 9.99 });
-  assertClose(r1.capitalGainsAmount, 120000, 1, '[T1] capitalGainsAmount');
-  assertClose(r1.ltcgTax, 15000, 1, '[T1] ltcgTax');
-  assertClose(r1.redemptionAmount, 515000, 1, '[T1] redemptionAmount');
-  assertClose(r1.finalRedemptionPortfolio, 608384, 10, '[T1] finalRedemptionPortfolio');
+  // ── (A) New LTCG tax logic fixtures ────────────────────────────────────
 
-  // Test 2: Portfolio 20L, duration 2yr
-  const r2 = calculateAll({ portfolioAmount: 2000000, expectedCAGR: 12, amountNeeded: 500000, durationYears: 2, loanInterestRate: 9.99 });
-  assertClose(r2.capitalGainsAmount, 240000, 1, '[T2] capitalGainsAmount');
-  assertClose(r2.ltcgTax, 30000, 1, '[T2] ltcgTax');
-  assertClose(r2.redemptionAmount, 530000, 1, '[T2] redemptionAmount');
-  assertClose(r2.finalRedemptionPortfolio, 1843968, 10, '[T2] finalRedemptionPortfolio');
+  // Fixture 1: no prior FY gains, profit under exemption → zero LTCG tax
+  const f1 = calcTaxFromCostBasis({ redemptionAmount: 515000, purchaseCost: 395000, existingFYGains: 0, stcgTax: 0 });
+  assertClose(f1.capitalGainsAmount, 120000, 1, '[F1] capitalGainsAmount');
+  assertClose(f1.ltcgTax, 0, 0.01, '[F1] ltcgTax (profit under exemption → 0)');
 
-  // Test 3: Portfolio 20L, duration 4yr
-  const r4 = calculateAll({ portfolioAmount: 2000000, expectedCAGR: 12, amountNeeded: 500000, durationYears: 4, loanInterestRate: 9.99 });
-  assertClose(r4.capitalGainsAmount, r2.capitalGainsAmount, 1, '[T3] capitalGainsAmount unchanged');
-  assertClose(r4.ltcgTax, r2.ltcgTax, 1, '[T3] ltcgTax unchanged');
-  assertClose(r4.redemptionAmount, r2.redemptionAmount, 1, '[T3] redemptionAmount unchanged');
-  console.assert(r4.finalRedemptionPortfolio > r2.finalRedemptionPortfolio, `[T3] finalRedemptionPortfolio compound growth: expected ${r4.finalRedemptionPortfolio} > ${r2.finalRedemptionPortfolio}`);
-  assertClose(r4.finalRedemptionPortfolio, 2313073, 10, '[T3] finalRedemptionPortfolio');
+  // Fixture 2: partial prior FY gains reduce remaining exemption
+  const f2 = calcTaxFromCostBasis({ redemptionAmount: 515000, purchaseCost: 395000, existingFYGains: 50000, stcgTax: 0 });
+  assertClose(f2.capitalGainsAmount, 120000, 1, '[F2] capitalGainsAmount');
+  // remaining exemption = 125000-50000 = 75000; taxable = 120000-75000 = 45000; tax = 0.125*45000 = 5625
+  assertClose(f2.ltcgTax, 5625, 1, '[F2] ltcgTax (partial exemption)');
 
-  // Test 4: Loan side
-  const r10 = calculateAll({ portfolioAmount: 1000000, expectedCAGR: 12, amountNeeded: 500000, durationYears: 2, loanInterestRate: 9.99 });
-  const r20 = calculateAll({ portfolioAmount: 2000000, expectedCAGR: 12, amountNeeded: 500000, durationYears: 2, loanInterestRate: 9.99 });
-  assertClose(r10.totalLoanCost, r20.totalLoanCost, 1, '[T4] totalLoanCost unaffected');
-  assertClose(r10.loanAmount, r20.loanAmount, 1, '[T4] loanAmount unaffected');
-  console.assert(Math.abs(r10.finalLoanPortfolio - r20.finalLoanPortfolio) > 10, `[T4] finalLoanPortfolio should differ`);
+  // Fixture 3: prior FY gains already exceed exemption → full profit taxed
+  const f3 = calcTaxFromCostBasis({ redemptionAmount: 515000, purchaseCost: 395000, existingFYGains: 200000, stcgTax: 0 });
+  // remaining exemption = 0; taxable = full 120000; tax = 0.125*120000 = 15000
+  assertClose(f3.ltcgTax, 15000, 1, '[F3] ltcgTax (no exemption left)');
 
-  console.log('[LAMF Verification] All assertions passed ✓ (Correction #5 regression suite)');
+  // ── (B) Loan-side regression (unchanged from Correction #5) ────────────
+
+  // These use a purchaseCost of 70% of amountNeeded (500000*0.7 = 350000)
+  // For loan-side numbers purchaseCost only affects the redemption side so
+  // we just verify loan-side is still correct.
+  const loanTest = calcLoanPortfolio({
+    portfolioAmount: 1000000,
+    expectedCAGR: 12,
+    durationYears: 2,
+    loanAmount: 500000,
+    loanInterestRate: 9.99,
+    loanTenureYears: 2,
+    processingFee: computeProcessingFee(500000),
+  });
+  assertClose(loanTest.interest, 99900, 1, '[Loan] interest');
+  assertClose(loanTest.totalLoanCost, 99900 + 4999, 1, '[Loan] totalLoanCost');
+  // grownFullPortfolio = 1000000 * 1.12^2 = 1254400
+  assertClose(loanTest.grownFullPortfolio, 1254400, 10, '[Loan] grownFullPortfolio');
+
+  // ── (C) Year-by-year chart data sanity check ───────────────────────────
+  const chartData = generateYearByYearData({
+    portfolioAmount: 2000000,
+    expectedCAGR: 12,
+    amountNeeded: 500000,
+    totalTax: 0,          // 0 tax for simplicity
+    loanAmount: 500000,
+    loanInterestRate: 10,
+    processingFee: computeProcessingFee(500000),
+    durationYears: 3,
+    extraYears: 2,
+  });
+  console.assert(chartData.length === 6, `[Chart] should have 6 data points (0–5), got ${chartData.length}`);
+  // At t=0 redemptionValue should be 2000000-500000-0 = 1500000
+  assertClose(chartData[0].redemptionValue, 1500000, 10, '[Chart] t=0 redemptionValue');
+  // Loan path should grow faster than redemption path over time
+  console.assert(
+    chartData[chartData.length - 1].loanValue > chartData[chartData.length - 1].redemptionValue,
+    `[Chart] Loan path should exceed redemption path at year ${chartData.length - 1}`
+  );
+
+  console.log('[LAMF Verification] All assertions passed ✓ (Correction #6 — cost-basis LTCG + chart)');
 }
 
 // Run verification once on module load (dev only)
